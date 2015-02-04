@@ -307,7 +307,12 @@ router.get('/', function(req, res) {
 });
 
 router.post('/register', function(req, res) {
-    res.json({result: req.body.username});
+    if (!(req.body.newUser.username && req.body.newUser.password && req.body.newUser.sex && req.body.newUser.nickname)){
+        res.statusCode = 400;
+        res.json({result: '用户名,密码,性别,昵称都需要填写!'});
+        return;
+    }
+    res.json({result: req.body.newUser.username});
 });
 
 router.put('/login', function(req, res) {
@@ -371,6 +376,5 @@ router.get('/getSpecialInfo', function(req, res) {
         }
     });
 });
-
 
 module.exports = router;
