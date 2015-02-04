@@ -1,5 +1,9 @@
 var express = require('express');
 var router = express.Router();
+var mongo = require('mongodb');
+var monk = require('monk');
+var db = monk('localhost:27017/HX2');
+var async = require("async");
 
 var meets = [
     {
@@ -307,16 +311,111 @@ router.get('/', function(req, res) {
 });
 
 router.post('/register', function(req, res) {
-    if (!(req.body.newUser.username && req.body.newUser.password && req.body.newUser.sex && req.body.newUser.nickname)){
+    if (!(req.body.newUser.username && req.body.newUser.password && req.body.newUser.sex && req.body.newUser.nickname && req.body.newUser.cid)){
         res.statusCode = 400;
         res.json({result: '用户名,密码,性别,昵称都需要填写!'});
         return;
     }
-    res.json({result: req.body.newUser.username});
+
+    var newUser;
+
+    function callback(err, result) {
+        if (err){
+            res.statusCode = 400;
+            res.json({result: err.toString()});
+            return;
+        }
+        else{
+            res.json({result: req.body.newUser.username});
+        }
+    }
+
+    async.waterfall([
+            function(next){
+                db.get('user').insert(
+                    {
+                        username: req.body.newUser.username,
+                        password: req.body.newUser.password,
+                        nickname: req.body.newUser.nickname,
+                        sex: req.body.newUser.sex
+                    },
+                    next
+                );
+            },
+            function(result, next)
+            {
+                newUser = result;
+                //清空同台设备绑定的其他用户
+                db.get('info').findAndModify(
+                    {
+                        cid: {$eq: req.body.newUser.cid}
+                    },
+                    {
+                        $set:
+                        {
+                            cid: null
+                        }
+                    },
+                    next
+                );
+            },
+            function(result, next){
+                db.get('info').insert(
+                    {
+                        username: req.body.newUser.username,
+                        sex: req.body.newUser.sex,
+                        cid: req.body.newUser.cid
+                    },
+                    next
+                );
+            }
+        ],
+        callback
+    );
 });
 
-router.put('/login', function(req, res) {
-    res.json({result: req.body.username});
+router.post('/login', function(req, res) {
+    db.get('user').find(
+        {
+            username: req.body.username,
+            password: req.body.password
+        },
+        function(e,docs){
+            if (docs.length == 1)
+            {
+                //清空同台设备绑定的其他用户
+                db.get('info').findAndModify(
+                    {
+                        cid: {$eq: req.body.cid},
+                        username: {$ne: req.body.username}
+                    },
+                    {
+                        $set:
+                        {
+                            cid: null
+                        }
+                    },
+                    function(err, docs1)
+                    {
+                        if (err){
+                            res.statusCode = 400;
+                            res.json({result: err.toString()});
+                            return;
+                        }
+                        else{
+                            res.json({result: docs[0].username});
+                        }
+                    }
+                );
+            }
+            else
+            {
+                res.statusCode = 400;
+                res.json({result: '用户名或密码错误!'});
+                return;
+            }
+        }
+    );
 });
 
 router.get('/getMeets', function(req, res) {
