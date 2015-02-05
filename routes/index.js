@@ -323,7 +323,6 @@ router.post('/register', function(req, res) {
         if (err){
             res.statusCode = 400;
             res.json({result: err.toString()});
-            return;
         }
         else{
             res.json({result: req.body.newUser.username});
@@ -400,7 +399,6 @@ router.post('/login', function(req, res) {
                         if (err){
                             res.statusCode = 400;
                             res.json({result: err.toString()});
-                            return;
                         }
                         else{
                             res.json({result: docs[0].username});
@@ -419,12 +417,58 @@ router.post('/login', function(req, res) {
 });
 
 router.get('/getMeets', function(req, res) {
-    res.json({result: meets});
+    db.get('meet').find(
+        {
+            $or: [
+                {"creater.username": req.body.username},
+                {"target.username": req.body.username}
+            ],
+            status: {$ne:"成功"}
+        },
+        {
+            sort: {_id: -1}
+        },
+        function(err, docs){
+            if (err){
+                res.statusCode = 400;
+                res.json({result: err.toString()});
+            }
+            else{
+                res.json({result: docs});
+            }
+        }
+    );
+
 });
 
-router.put('/updateInfo', function(req, res) {
-    console.log(req);
-    res.json({result: 'ok'});
+router.post('/updateInfo', function(req, res){
+    db.get('info').findAndModify(
+        {username: req.body.username},
+        {
+            $set: {
+                specialInfo: req.body.myInfo.specialInfo,
+                specialPic: req.body.myInfo.specialPic,
+                updateTime: new Date(),
+                latestLocation: req.body.latestLocation
+            }
+        },
+        {
+            new: true
+        },
+        function(err, doc){
+            if (err) {
+                res.statusCode = 400;
+                res.json({result: err.toString()});
+            }
+            else {
+                res.json({result: 'ok'});
+            }
+        }
+    );
+});
+
+router.post('/uploadSpecialPic', function(req, res){
+    res.json({result: req.files.avatar.name});
 });
 
 router.get('/getLocs', function(req, res) {
@@ -467,13 +511,64 @@ router.post('/sendChatMsg', function(req, res) {
     res.json({result: 'ok'});
 });
 
-router.get('/getSpecialInfo', function(req, res) {
-    res.json({
-        result: {
-            specialInfo: specialInfo,
-            specialPic: "b.jpg"
+router.get('/getInfo', function(req, res) {
+    console.log(req);
+    var now = new Date();
+    var currentDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    db.get('info').find(
+        {
+            username: req.query.username,
+            updateTime: {$gt:currentDate}
+        },
+        function(err, docs){
+            if (err){
+                res.statusCode = 400;
+                res.json({result: err.toString()});
+            }
+            else{
+                if (docs.length == 0)
+                {
+                    db.get('user').findOne(
+                        {
+                            username: req.query.username
+                        },
+                        function(err, doc){
+                            if (err) {
+                                res.statusCode = 400;
+                                res.json({result: err.toString()});
+                            }
+                            else
+                            {
+                                res.json(
+                                    {
+                                        result: {
+                                            "specialInfo": {
+                                                "sex": doc.sex,
+                                                "clothesColor": null,
+                                                "clothesStyle": null,
+                                                "clothesType": null,
+                                                "glasses": null,
+                                                "hair": null
+                                            },
+                                            specialPic: null
+                                        }
+                                    }
+                                );
+                            }
+
+                        }
+                    );
+                }
+                else
+                {
+                    res.json({
+                        result: docs[0]
+                    });
+                }
+            }
         }
-    });
+    );
 });
+
 
 module.exports = router;
