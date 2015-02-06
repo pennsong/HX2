@@ -186,6 +186,34 @@ var friend2 = {
     ]
 }
 
+
+var friend3 = {
+    creater: {
+        username: 'au',
+        nickname: 'an',
+        alias: 'aa'
+    },
+    target: {
+        username: 'bu',
+        nickname: 'bn',
+        alias: 'ba'
+    },
+    messages: [
+        {
+            from: 'a',
+            to: 'b',
+            content: 'tt1',
+            time: '2015-01-01 10:00'
+        },
+        {
+            from: 'b',
+            to: 'a',
+            content: 'tt2',
+            time: '2015-01-01 10:01'
+        }
+    ]
+}
+
 var friends = {
     fa: friend,
     fb: friend2
@@ -420,8 +448,8 @@ router.get('/getMeets', function(req, res) {
     db.get('meet').find(
         {
             $or: [
-                {"creater.username": req.body.username},
-                {"target.username": req.body.username}
+                {"creater.username": req.query.username},
+                {"target.username": req.query.username}
             ],
             status: {$ne:"成功"}
         },
@@ -448,7 +476,7 @@ router.post('/updateInfo', function(req, res){
             $set: {
                 specialInfo: req.body.myInfo.specialInfo,
                 specialPic: req.body.myInfo.specialPic,
-                updateTime: new Date(),
+                updateTime: Date.now(),
                 latestLocation: req.body.latestLocation
             }
         },
@@ -476,7 +504,107 @@ router.get('/getLocs', function(req, res) {
 });
 
 router.post('/searchTargets', function(req, res) {
-    res.json({result: targets});
+    var realResult = null;
+    var before15Min = Date.now() - 15*60000;
+    function finalCallback(err, result){
+        if (err) {
+            res.statusCode = 400;
+            res.json({result: err.toString()});
+        }
+        else {
+            res.json({result: result});
+        }
+    }
+    async.waterfall([
+            function(next){
+                db.get('info').col.aggregate(
+                    [
+                        {
+                            $geoNear: {
+                                near: { type: "Point", coordinates: [ Number(req.body.sendLoc.lng), Number(req.body.sendLoc.lat) ] },
+                                distanceField: "latestLocation",
+                                maxDistance: 500,
+                                query: {
+                                    locUpdateTime: {$gt: before15Min},
+                                    username:{$ne: req.body.username},
+                                    "specialInfo.sex":req.body.meetCondition.specialInfo.sex
+                                },
+                                //includeLocs: "dist.location",
+                                //num: 100,
+                                spherical: true
+                            }
+                        },
+                        {
+                            $project: {
+                                finalTotal: {
+                                    $let: {
+                                        vars: {
+                                            vhair: { $cond: { if: {$eq: ['$specialInfo.hair', req.body.meetCondition.specialInfo.hair]}, then: 1, else: 0 } },
+                                            vglasses: { $cond: { if: {$eq: ['$specialInfo.glasses', req.body.meetCondition.specialInfo.glasses]}, then: 1, else: 0 } },
+                                            vclothesType: { $cond: { if: {$eq: ['$specialInfo.clothesType', req.body.meetCondition.specialInfo.clothesType]}, then: 1, else: 0 } },
+                                            vclothesColor: { $cond: { if: {$eq: ['$specialInfo.clothesColor', req.body.meetCondition.specialInfo.clothesColor]}, then: 1, else: 0 } },
+                                            vclothesStyle: { $cond: { if: {$eq: ['$specialInfo.clothesStyle', req.body.meetCondition.specialInfo.clothesStyle]}, then: 1, else: 0 } }
+                                        },
+                                        in: { $add: [ "$$vhair", "$$vglasses", "$$vclothesType", "$$vclothesColor", "$$vclothesStyle" ] }
+                                    }
+                                },
+                                username: 1,
+                                specialPic: 1
+                            }
+                        },
+                        {
+                            $match :
+                            {
+                                finalTotal: {$gte: 4}
+                            }
+                        },
+                        {
+                            $sort:
+                            {
+                                finalTotal: -1
+                            }
+                        }
+                    ],
+                    next
+                );
+            },
+            function(result, next){
+                realResult = result;
+                //随机图片
+                var needRanNum = 4 - result.length;
+                if (needRanNum > 0)
+                {
+                    //已有图片
+                    var existPics = result.map(function(info) {
+                        return info.specialPic;
+                    });
+
+                    db.get('info').find(
+                        {
+                            specialPic: {
+                                $exists: true, $nin: existPics,
+                                $ne: ""
+                            },
+                            username:{$ne: req.body.username}
+                        },
+                        {limit: needRanNum},
+                        next
+                    );
+                }
+                else{
+                    finalCallback(null, realResult);
+                }
+            },
+            function(result, next)
+            {
+                var fakeResult = result.map(function(info){
+                    return {username: "fake", specialPic: info.specialPic};
+                });
+                next(null, realResult.concat(fakeResult));
+            }
+        ],
+        finalCallback
+    );
 });
 
 router.get('/getBigPic', function(req, res) {
@@ -484,7 +612,119 @@ router.get('/getBigPic', function(req, res) {
 });
 
 router.post('/createMeet', function(req, res) {
-    res.json({result: meet});
+    function finalCallback(err, result){
+        if (err) {
+            res.statusCode = 400;
+            res.json({result: err.toString()});
+        }
+        else {
+            result.createTime = new Date( parseInt( result._id.toString().substring(0,8), 16 ) * 1000 ).toISOString();
+            res.json({result: result});
+        }
+    }
+
+    if (req.body.status == '待确认')
+    {
+        async.waterfall([
+                function(next){
+                    db.get('user').find(
+                        {
+                            username: req.body.creater_username
+                        },
+                        next
+                    );
+                },
+                function(result, next){
+                    db.get('meet').insert(
+                        {
+                            creater: {
+                                username: result.username,
+                                nickname: result.nickname
+                            },
+                            target: null,
+                            status: req.body.status,
+                            mapLoc: req.body.mapLoc,
+                            specialInfo: req.body.specialInfo,
+                            personLoc: req.body.personLoc
+                        },
+                        next
+                    );
+                }
+            ],
+            finalCallback
+        );
+    }
+    //待回复
+    else
+    {
+        var tmpSpecialPic;
+        async.waterfall([
+                function(next){
+                    db.get('info').findOne(
+                        {
+                            username: req.body.target_username
+                        },
+                        next
+                    );
+                },
+                function(result, next){
+                    tmpSpecialPic = result.specialPic;
+                    db.get('user').find(
+                        {
+                            username: req.body.target_username
+                        },
+                        next
+                    );
+                },
+                function(result, next){
+                    //确认meet
+                    if (req.body.meetId)
+                    {
+                        db.get('meet').findAndModify(
+                            {
+                                _id: req.body.meetId
+                            }, // query
+                            {
+                                $set: {
+                                    target: {
+                                        username: req.body.target_username,
+                                        nickname: result.nickname,
+                                        specialPic: tmpSpecialPic
+                                    },
+                                    status: '待回复'
+                                }
+                            },
+                            {
+                                new: true
+                            },
+                            next
+                        );
+                    }
+                    else
+                    {
+                        db.get('meet').insert(
+                            {
+                                creater: {
+                                    username: req.body.creater_username
+                                },
+                                target: {
+                                    username: req.body.target_username,
+                                    nickname: result.nickname,
+                                    specialPic: tmpSpecialPic
+                                },
+                                status: req.body.status,
+                                mapLoc: req.body.mapLoc,
+                                specialInfo: req.body.specialInfo,
+                                personLoc: req.body.personLoc
+                            },
+                            next
+                        );
+                    }
+                }
+            ],
+            finalCallback
+        );
+    }
 });
 
 router.put('/decideMeet', function(req, res) {
@@ -493,6 +733,77 @@ router.put('/decideMeet', function(req, res) {
 
 router.put('/replyMeet', function(req, res) {
     res.json({result: friend});
+});
+
+router.post('/replySuccess', function(req, res) {
+    function finalCallback(err, doc) {
+        if (err){
+            res.statusCode = 400;
+            res.json({result: err.toString()});
+        }
+        else{
+            res.json({result: doc, meetId: req.body.meetId});
+        }
+    }
+
+    async.waterfall([
+            function(next){
+                db.get('friend').find(
+                    {
+                        $or: [
+                            {
+                                "creater.username" : req.body.creater_username,
+                                "target.username" : req.body.target_username
+                            },
+                            {
+                                "creater.username" : req.body.target_username,
+                                "target.username" : req.body.creater_username
+                            }
+                        ]
+                    },
+                    next
+                );
+            },
+            function(result, next)
+            {
+                if (result.length > 0)
+                {
+                    res.statusCode = 409;
+                    res.json({result: "此人已经是你的朋友"});
+                    return;
+                }
+                else
+                {
+                    //设置meet为成功
+                    db.get('meet').findAndModify(
+                        {
+                            _id: req.body.meetId
+                        }, // query
+                        {
+                            $set:
+                            {
+                                status: '成功'
+                            }
+                        },
+                        { new: true }, // options
+                        next
+                    );
+                }
+            },
+            function(result, next){
+                //
+                db.get('friend').insert(
+                    {
+                        creater: result.creater,
+                        target: result.target,
+                        messages: []
+                    },
+                    next
+                );
+            }
+        ],
+        finalCallback
+    );
 });
 
 router.get('/getFriends', function(req, res) {
@@ -511,14 +822,68 @@ router.post('/sendChatMsg', function(req, res) {
     res.json({result: 'ok'});
 });
 
-router.get('/getInfo', function(req, res) {
-    console.log(req);
+router.put('/updateLocation', function(req, res) {
+    db.get('info').findAndModify(
+        {
+            username: req.body.username
+        }, // query
+        {
+            $set:
+            {
+                latestLocation: req.body.latestLocation,
+                locUpdateTime: Date.now()
+            }
+        },
+        {}, // options
+        function(err, doc) {
+            if (err){
+                res.statusCode = 400;
+                res.json({result: err.toString()});
+            }
+            else
+            {
+                res.json({result: 'ok'});
+            }
+        });
+});
+
+router.get('/existInfo', function(req, res) {
     var now = new Date();
     var currentDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    var currentDateTimeStamp = currentDate.getTime();
     db.get('info').find(
         {
             username: req.query.username,
-            updateTime: {$gt:currentDate}
+            updateTime: {$gt:currentDateTimeStamp}
+        },
+        function(err, docs){
+            if (err){
+                res.statusCode = 400;
+                res.json({result: err.toString()});
+            }
+            else
+            {
+                if (docs.length > 0)
+                {
+                    res.json({result: 'yes'});
+                }
+                else
+                {
+                    res.json({result: 'no'});
+                }
+            }
+        }
+    );
+});
+
+router.get('/getInfo', function(req, res) {
+    var now = new Date();
+    var currentDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    var currentDateTimeStamp = currentDate.getTime();
+    db.get('info').find(
+        {
+            username: req.query.username,
+            updateTime: {$gt:currentDateTimeStamp}
         },
         function(err, docs){
             if (err){
