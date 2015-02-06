@@ -495,14 +495,6 @@ router.post('/updateInfo', function(req, res){
     );
 });
 
-router.post('/uploadSpecialPic', function(req, res){
-    res.json({result: req.files.avatar.name});
-});
-
-router.get('/getLocs', function(req, res) {
-    res.json({result: locs});
-});
-
 router.post('/searchTargets', function(req, res) {
     var realResult = null;
     var before15Min = Date.now() - 15*60000;
@@ -607,10 +599,6 @@ router.post('/searchTargets', function(req, res) {
     );
 });
 
-router.get('/getBigPic', function(req, res) {
-    res.json({result: ''});
-});
-
 router.post('/createMeet', function(req, res) {
     function finalCallback(err, result){
         if (err) {
@@ -627,7 +615,7 @@ router.post('/createMeet', function(req, res) {
     {
         async.waterfall([
                 function(next){
-                    db.get('user').find(
+                    db.get('user').findOne(
                         {
                             username: req.body.creater_username
                         },
@@ -639,7 +627,6 @@ router.post('/createMeet', function(req, res) {
                         {
                             creater: {
                                 username: result.username,
-                                nickname: result.nickname
                             },
                             target: null,
                             status: req.body.status,
@@ -669,7 +656,7 @@ router.post('/createMeet', function(req, res) {
                 },
                 function(result, next){
                     tmpSpecialPic = result.specialPic;
-                    db.get('user').find(
+                    db.get('user').findOne(
                         {
                             username: req.body.target_username
                         },
@@ -727,14 +714,6 @@ router.post('/createMeet', function(req, res) {
     }
 });
 
-router.put('/decideMeet', function(req, res) {
-    res.json({result: meet});
-});
-
-router.put('/replyMeet', function(req, res) {
-    res.json({result: friend});
-});
-
 router.post('/replySuccess', function(req, res) {
     function finalCallback(err, doc) {
         if (err){
@@ -746,6 +725,7 @@ router.post('/replySuccess', function(req, res) {
         }
     }
 
+    var tmpSpecialPic;
     async.waterfall([
             function(next){
                 db.get('friend').find(
@@ -774,21 +754,40 @@ router.post('/replySuccess', function(req, res) {
                 }
                 else
                 {
-                    //设置meet为成功
-                    db.get('meet').findAndModify(
+                    db.get('info').findOne(
                         {
-                            _id: req.body.meetId
-                        }, // query
-                        {
-                            $set:
-                            {
-                                status: '成功'
-                            }
+                            username: req.body.creater_username
                         },
-                        { new: true }, // options
                         next
                     );
                 }
+            },
+            function(result, next){
+                tmpSpecialPic = result.specialPic;
+                db.get('user').findOne(
+                    {
+                        username: req.body.creater_username
+                    },
+                    next
+                );
+            },
+            function(result, next){
+                //设置meet为成功, 添加creater的specialPic, nickname
+                db.get('meet').findAndModify(
+                    {
+                        _id: req.body.meetId
+                    }, // query
+                    {
+                        $set:
+                        {
+                            "creater.nickname": result.nickname,
+                            "creater.specialPic": tmpSpecialPic,
+                            status: '成功'
+                        }
+                    },
+                    { new: true }, // options
+                    next
+                );
             },
             function(result, next){
                 //
@@ -807,19 +806,23 @@ router.post('/replySuccess', function(req, res) {
 });
 
 router.get('/getFriends', function(req, res) {
-    res.json({result: friends});
-});
-
-router.delete('/deleteFriend', function(req, res) {
-    res.json({result: 'ok'});
-});
-
-router.get('/getChats', function(req, res) {
-    res.json({result: chats});
-});
-
-router.post('/sendChatMsg', function(req, res) {
-    res.json({result: 'ok'});
+    db.get('friend').find(
+        {
+            $or: [
+                {"creater.username": req.query.username},
+                {"target.username": req.query.username}
+            ]
+        },
+        function(err, docs){
+            if (err){
+                res.statusCode = 400;
+                res.json({result: err.toString()});
+            }
+            else{
+                res.json({result: docs});
+            }
+        }
+    );
 });
 
 router.put('/updateLocation', function(req, res) {
@@ -936,4 +939,28 @@ router.get('/getInfo', function(req, res) {
 });
 
 
+router.get('/getBigPic', function(req, res) {
+    res.json({result: ''});
+});
+
+router.post('/uploadSpecialPic', function(req, res){
+    res.json({result: req.files.avatar.name});
+});
+
+router.get('/getLocs', function(req, res) {
+    res.json({result: locs});
+});
+
+
+router.delete('/deleteFriend', function(req, res) {
+    res.json({result: 'ok'});
+});
+
+router.get('/getChats', function(req, res) {
+    res.json({result: chats});
+});
+
+router.post('/sendChatMsg', function(req, res) {
+    res.json({result: 'ok'});
+});
 module.exports = router;
