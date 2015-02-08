@@ -507,8 +507,33 @@ router.post('/searchTargets', function(req, res) {
             res.json({result: result});
         }
     }
+
+    var curFriends1 = [];
+    var curFriends2 = [];
     async.waterfall([
             function(next){
+                db.get('friend').find(
+                    {
+                        "creater.username": req.body.username
+                    },
+                    next
+                );
+            },
+            function(result, next){
+                curFriends1 = result.map(function(item){
+                    return item.target.username;
+                });
+                db.get('friend').find(
+                    {
+                        "target.username": req.body.username
+                    },
+                    next
+                );
+            },
+            function(result, next){
+                curFriends2 = result.map(function(item){
+                    return item.creater.username
+                });
                 db.get('info').col.aggregate(
                     [
                         {
@@ -518,8 +543,8 @@ router.post('/searchTargets', function(req, res) {
                                 maxDistance: 500,
                                 query: {
                                     locUpdateTime: {$gt: before15Min},
-                                    username:{$ne: req.body.username},
-                                    "specialInfo.sex":req.body.meetCondition.specialInfo.sex
+                                    "specialInfo.sex":req.body.meetCondition.specialInfo.sex,
+                                    username: {$ne: req.body.username, $nin: curFriends1.concat(curFriends2)}
                                 },
                                 //includeLocs: "dist.location",
                                 //num: 100,
@@ -600,6 +625,8 @@ router.post('/searchTargets', function(req, res) {
 });
 
 router.post('/createMeet', function(req, res) {
+    var end = false;
+
     function finalCallback(err, result){
         if (err) {
             res.statusCode = 400;
@@ -608,6 +635,16 @@ router.post('/createMeet', function(req, res) {
         else {
             result.createTime = new Date( parseInt( result._id.toString().substring(0,8), 16 ) * 1000 ).toISOString();
             res.json({result: result});
+        }
+    }
+
+    function finalCallback2(err, result){
+        if (err) {
+            res.statusCode = 400;
+            res.json({result: err.toString()});
+        }
+        else {
+            res.json({result: result, ppNote: '互发'});
         }
     }
 
@@ -626,7 +663,7 @@ router.post('/createMeet', function(req, res) {
                     db.get('meet').insert(
                         {
                             creater: {
-                                username: result.username,
+                                username: result.username
                             },
                             target: null,
                             status: req.body.status,
@@ -644,6 +681,109 @@ router.post('/createMeet', function(req, res) {
     //待回复
     else
     {
+        //判断是否是已有朋友
+        db.get('friend').find(
+            {
+                $or: [
+                    {
+                        "creater.username" : req.body.creater_username,
+                        "target.username" : req.body.target_username
+                    },
+                    {
+                        "creater.username" : req.body.target_username,
+                        "target.username" : req.body.creater_username
+                    }
+                ]
+            },
+            function(err, result){
+                if (err) {
+                    res.statusCode = 400;
+                    res.json({result: err.toString()});
+                }
+                else {
+                    if (result.length > 0)
+                    {
+                        res.statusCode = 409;
+                        res.json({result: "此人已经是你的朋友"});
+                        end = true;
+                    }
+                }
+            }
+        );
+
+        if (end)
+        {
+            return;
+        }
+
+        //判断是否有互发
+
+        db.get('meet').find(
+            {
+                "creater.username" : req.body.target_username,
+                "target.username" : req.body.creater_username
+            },
+            function(err, result){
+                if (err) {
+                    res.statusCode = 400;
+                    res.json({result: err.toString()});
+                    end = true;
+                }
+                else {
+                    if (result.length > 0)
+                    {
+                        var tmpMeetId = result[0]._id;
+                        //有互发, 自动成为朋友
+                        async.waterfall([
+                                function(next){
+                                    db.get('info').findOne(
+                                        {
+                                            username: req.body.target_username
+                                        },
+                                        next
+                                    );
+                                },
+                                function(result, next){
+                                    tmpSpecialPic = result.specialPic;
+                                    db.get('user').findOne(
+                                        {
+                                            username: req.body.target_username
+                                        },
+                                        next
+                                    );
+                                },
+                                function(result, next){
+                                    //设置meet为成功, 添加creater的specialPic, nickname
+                                    db.get('meet').findAndModify(
+                                        {
+                                            _id: tmpMeetId
+                                        }, // query
+                                        {
+                                            $set:
+                                            {
+                                                "creater.nickname": result.nickname,
+                                                "creater.specialPic": tmpSpecialPic,
+                                                status: '成功'
+                                            }
+                                        },
+                                        { new: true }, // options
+                                        next
+                                    );
+                                }
+                            ],
+                            finalCallback2
+                        );
+                        end = true;
+                    }
+                }
+            }
+        );
+
+        if (end)
+        {
+            return;
+        }
+
         var tmpSpecialPic;
         async.waterfall([
                 function(next){
