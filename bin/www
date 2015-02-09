@@ -1,9 +1,988 @@
 #!/usr/bin/env node
 var debug = require('debug')('HX2');
-var app = require('../app');
+var express = require('express');
+var path = require('path');
+var favicon = require('serve-favicon');
+var logger = require('morgan');
+var cookieParser = require('cookie-parser');
+var bodyParser = require('body-parser');
 
-app.set('port', process.env.PORT || 3000);
+var multer  = require('multer');
 
-var server = app.listen(app.get('port'), function() {
-  debug('Express server listening on port ' + server.address().port);
+//var routes = require('./routes/index');
+//var users = require('./routes/users');
+
+//var router = express.Router();
+var mongo = require('mongodb');
+var monk = require('monk');
+var db = monk('localhost:27017/HX2');
+var async = require("async");
+
+
+var cors = require('cors');
+//var app = express();
+app = require('express.io')()
+app.http().io()
+
+app.use(bodyParser({limit: '5mb'}));
+app.use(cors());
+// view engine setup
+app.set('views', path.join(__dirname, '../views'));
+app.set('view engine', 'jade');
+
+// uncomment after placing your favicon in /public
+//app.use(favicon(__dirname + '/public/favicon.ico'));
+app.use(logger('dev'));
+
+app.use(multer({ dest: '../public/images/normal/'}));
+
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: false }));
+app.use(cookieParser());
+app.use(express.static(path.join(__dirname, '../public')));
+
+//app.use('/', router);
+//app.use('/', routes);
+//app.use('/users', users);
+
+
+
+/* GET home page. */
+app.get('/', function(req, res) {
+    res.render('index', { title: 'Express' });
 });
+
+app.post('/register', function(req, res) {
+    if (!(req.body.newUser.username && req.body.newUser.password && req.body.newUser.sex && req.body.newUser.nickname && req.body.newUser.cid)){
+        res.statusCode = 400;
+        res.json({result: '用户名,密码,性别,昵称都需要填写!'});
+        return;
+    }
+
+    var newUser;
+
+    function callback(err, result) {
+        if (err){
+            res.statusCode = 400;
+            res.json({result: err.toString()});
+        }
+        else{
+            res.json({result: req.body.newUser.username});
+        }
+    }
+
+    async.waterfall([
+            function(next){
+                db.get('user').insert(
+                    {
+                        username: req.body.newUser.username,
+                        password: req.body.newUser.password,
+                        nickname: req.body.newUser.nickname,
+                        sex: req.body.newUser.sex
+                    },
+                    next
+                );
+            },
+            function(result, next)
+            {
+                newUser = result;
+                //清空同台设备绑定的其他用户
+                db.get('info').findAndModify(
+                    {
+                        cid: {$eq: req.body.newUser.cid}
+                    },
+                    {
+                        $set:
+                        {
+                            cid: null
+                        }
+                    },
+                    next
+                );
+            },
+            function(result, next){
+                db.get('info').insert(
+                    {
+                        username: req.body.newUser.username,
+                        sex: req.body.newUser.sex,
+                        cid: req.body.newUser.cid
+                    },
+                    next
+                );
+            }
+        ],
+        callback
+    );
+});
+
+app.post('/login', function(req, res) {
+    req.io.broadcast('news', {my: 'login' + req.body.username});
+    db.get('user').find(
+        {
+            username: req.body.username,
+            password: req.body.password
+        },
+        function(e,docs){
+            if (docs.length == 1)
+            {
+                //清空同台设备绑定的其他用户
+                db.get('info').findAndModify(
+                    {
+                        cid: {$eq: req.body.cid},
+                        username: {$ne: req.body.username}
+                    },
+                    {
+                        $set:
+                        {
+                            cid: null
+                        }
+                    },
+                    function(err, docs1)
+                    {
+                        if (err){
+                            res.statusCode = 400;
+                            res.json({result: err.toString()});
+                        }
+                        else{
+                            res.json({result: docs[0].username});
+                        }
+                    }
+                );
+            }
+            else
+            {
+                res.statusCode = 400;
+                res.json({result: '用户名或密码错误!'});
+                return;
+            }
+        }
+    );
+});
+
+app.get('/getMeets', function(req, res) {
+    db.get('meet').find(
+        {
+            $or: [
+                {"creater.username": req.query.username},
+                {"target.username": req.query.username}
+            ],
+            status: {$ne:"成功"}
+        },
+        {
+            sort: {_id: -1}
+        },
+        function(err, docs){
+            if (err){
+                res.statusCode = 400;
+                res.json({result: err.toString()});
+            }
+            else{
+                res.json({result: docs});
+            }
+        }
+    );
+
+});
+
+app.post('/updateInfo', function(req, res){
+    db.get('info').findAndModify(
+        {username: req.body.username},
+        {
+            $set: {
+                specialInfo: req.body.myInfo.specialInfo,
+                specialPic: req.body.myInfo.specialPic,
+                updateTime: Date.now(),
+                latestLocation: req.body.latestLocation
+            }
+        },
+        {
+            new: true
+        },
+        function(err, doc){
+            if (err) {
+                res.statusCode = 400;
+                res.json({result: err.toString()});
+            }
+            else {
+                res.json({result: 'ok'});
+            }
+        }
+    );
+});
+
+app.post('/searchTargets', function(req, res) {
+    var realResult = null;
+    var before15Min = Date.now() - 15*60000;
+    function finalCallback(err, result){
+        if (err) {
+            res.statusCode = 400;
+            res.json({result: err.toString()});
+        }
+        else {
+            res.json({result: result});
+        }
+    }
+
+    var curFriends1 = [];
+    var curFriends2 = [];
+    async.waterfall([
+            function(next){
+                if (req.body.searchMode == '回复')
+                {
+                    db.get('meet').findOne(
+                        {
+                            _id: req.body.meetId
+                        },
+                        function(err, doc)
+                        {
+                            if (err)
+                            {
+                                res.statusCode = 400;
+                                res.json({result: err.toString()});
+                            }
+                            else
+                            {
+                                if (doc.replyLeft <= 0)
+                                {
+                                    res.statusCode = 409;
+                                    res.json({result: '没有剩余回复次数!'});
+                                }
+                                else
+                                {
+                                    next(null, null);
+                                }
+                            }
+                        }
+                    );
+                }
+                else
+                {
+                    next(null, null);
+                }
+            },
+            function(result, next){
+                db.get('friend').find(
+                    {
+                        "creater.username": req.body.username
+                    },
+                    next
+                );
+            },
+            function(result, next){
+                curFriends1 = result.map(function(item){
+                    return item.target.username;
+                });
+                db.get('friend').find(
+                    {
+                        "target.username": req.body.username
+                    },
+                    next
+                );
+            },
+            function(result, next){
+                curFriends2 = result.map(function(item){
+                    return item.creater.username
+                });
+                db.get('info').col.aggregate(
+                    [
+                        {
+                            $geoNear: {
+                                near: { type: "Point", coordinates: [ Number(req.body.sendLoc.lng), Number(req.body.sendLoc.lat) ] },
+                                distanceField: "latestLocation",
+                                maxDistance: 500,
+                                query: {
+                                    locUpdateTime: {$gt: before15Min},
+                                    "specialInfo.sex":req.body.meetCondition.specialInfo.sex,
+                                    username: {$ne: req.body.username, $nin: curFriends1.concat(curFriends2)}
+                                },
+                                //includeLocs: "dist.location",
+                                //num: 100,
+                                spherical: true
+                            }
+                        },
+                        {
+                            $project: {
+                                finalTotal: {
+                                    $let: {
+                                        vars: {
+                                            vhair: { $cond: { if: {$eq: ['$specialInfo.hair', req.body.meetCondition.specialInfo.hair]}, then: 1, else: 0 } },
+                                            vglasses: { $cond: { if: {$eq: ['$specialInfo.glasses', req.body.meetCondition.specialInfo.glasses]}, then: 1, else: 0 } },
+                                            vclothesType: { $cond: { if: {$eq: ['$specialInfo.clothesType', req.body.meetCondition.specialInfo.clothesType]}, then: 1, else: 0 } },
+                                            vclothesColor: { $cond: { if: {$eq: ['$specialInfo.clothesColor', req.body.meetCondition.specialInfo.clothesColor]}, then: 1, else: 0 } },
+                                            vclothesStyle: { $cond: { if: {$eq: ['$specialInfo.clothesStyle', req.body.meetCondition.specialInfo.clothesStyle]}, then: 1, else: 0 } }
+                                        },
+                                        in: { $add: [ "$$vhair", "$$vglasses", "$$vclothesType", "$$vclothesColor", "$$vclothesStyle" ] }
+                                    }
+                                },
+                                username: 1,
+                                specialPic: 1
+                            }
+                        },
+                        {
+                            $match :
+                            {
+                                finalTotal: {$gte: 4}
+                            }
+                        },
+                        {
+                            $sort:
+                            {
+                                finalTotal: -1
+                            }
+                        }
+                    ],
+                    next
+                );
+            },
+            function(result, next){
+                realResult = result;
+                //随机图片
+                var needRanNum = 4 - result.length;
+                if (needRanNum > 0)
+                {
+                    //已有图片
+                    var existPics = result.map(function(info) {
+                        return info.specialPic;
+                    });
+
+                    db.get('info').find(
+                        {
+                            specialPic: {
+                                $exists: true, $nin: existPics,
+                                $ne: ""
+                            },
+                            username:{$ne: req.body.username}
+                        },
+                        {limit: needRanNum},
+                        next
+                    );
+                }
+                else{
+                    finalCallback(null, realResult);
+                }
+            },
+            function(result, next)
+            {
+                var fakeResult = result.map(function(info){
+                    return {username: "fake", specialPic: info.specialPic};
+                });
+                next(null, realResult.concat(fakeResult));
+            }
+        ],
+        finalCallback
+    );
+});
+
+app.post('/createMeet', function(req, res) {
+    var end = false;
+    var tmpSpecialPic;
+
+    function finalCallback(err, result){
+        if (err) {
+            res.statusCode = 400;
+            res.json({result: err.toString()});
+        }
+        else {
+            result.createTime = new Date( parseInt( result._id.toString().substring(0,8), 16 ) * 1000 ).toISOString();
+            res.json({result: result});
+        }
+    }
+
+    function finalCallback2(err, result){
+        if (err) {
+            res.statusCode = 400;
+            res.json({result: err.toString()});
+        }
+        else {
+            res.json({result: result, ppNote: '互发'});
+        }
+    }
+
+    if (req.body.status == '待确认')
+    {
+        async.waterfall([
+                function(next){
+                    db.get('user').findOne(
+                        {
+                            username: req.body.creater_username
+                        },
+                        next
+                    );
+                },
+                function(result, next){
+                    db.get('meet').insert(
+                        {
+                            creater: {
+                                username: result.username
+                            },
+                            target: null,
+                            status: req.body.status,
+                            replyLeft: 2,
+                            mapLoc: req.body.mapLoc,
+                            specialInfo: req.body.specialInfo,
+                            personLoc: req.body.personLoc
+                        },
+                        next
+                    );
+                }
+            ],
+            finalCallback
+        );
+    }
+    //待回复
+    else
+    {
+        async.waterfall([
+                function(next){
+                    //判断是否是已有朋友
+                    db.get('friend').find(
+                        {
+                            $or: [
+                                {
+                                    "creater.username" : req.body.creater_username,
+                                    "target.username" : req.body.target_username
+                                },
+                                {
+                                    "creater.username" : req.body.target_username,
+                                    "target.username" : req.body.creater_username
+                                }
+                            ]
+                        },
+                        function(err, result){
+                            if (err) {
+                                res.statusCode = 400;
+                                res.json({result: err.toString()});
+                            }
+                            else {
+                                if (result.length > 0)
+                                {
+                                    res.statusCode = 409;
+                                    res.json({result: "此人已经是你的朋友"});
+                                }
+                                else
+                                {
+                                    next(null, null);
+                                }
+                            }
+                        }
+                    );
+                },
+                function(result, next)
+                {
+                    //判断是否有互发
+                    db.get('meet').find(
+                        {
+                            "creater.username" : req.body.target_username,
+                            "target.username" : req.body.creater_username
+                        },
+                        function(err, result){
+                            if (err) {
+                                res.statusCode = 400;
+                                res.json({result: err.toString()});
+                            }
+                            else {
+                                if (result.length > 0)
+                                {
+                                    //有互发
+                                    var tmpMeetId = result[0]._id;
+                                    //有互发, 自动成为朋友
+                                    async.waterfall([
+                                            function(next){
+                                                db.get('info').findOne(
+                                                    {
+                                                        username: req.body.target_username
+                                                    },
+                                                    next
+                                                );
+                                            },
+                                            function(result, next){
+                                                tmpSpecialPic = result.specialPic;
+                                                db.get('user').findOne(
+                                                    {
+                                                        username: req.body.target_username
+                                                    },
+                                                    next
+                                                );
+                                            },
+                                            function(result, next){
+                                                //设置meet为成功, 添加creater的specialPic, nickname
+                                                db.get('meet').findAndModify(
+                                                    {
+                                                        _id: tmpMeetId
+                                                    }, // query
+                                                    {
+                                                        $set:
+                                                        {
+                                                            "creater.nickname": result.nickname,
+                                                            "creater.specialPic": tmpSpecialPic,
+                                                            status: '成功'
+                                                        }
+                                                    },
+                                                    { new: true }, // options
+                                                    next
+                                                );
+                                            },
+                                            function(result, next){
+                                                db.get('friend').insert(
+                                                    {
+                                                        creater: result.creater,
+                                                        target: result.target,
+                                                        messages: []
+                                                    },
+                                                    next
+                                                );
+                                            }
+                                        ],
+                                        finalCallback2
+                                    );
+                                }
+                                else
+                                {
+                                    //无互发
+                                    async.waterfall([
+                                            function(next){
+                                                db.get('info').findOne(
+                                                    {
+                                                        username: req.body.target_username
+                                                    },
+                                                    next
+                                                );
+                                            },
+                                            function(result, next){
+                                                tmpSpecialPic = result.specialPic;
+                                                db.get('user').findOne(
+                                                    {
+                                                        username: req.body.target_username
+                                                    },
+                                                    next
+                                                );
+                                            },
+                                            function(result, next){
+                                                //确认meet
+                                                if (req.body.meetId)
+                                                {
+                                                    db.get('meet').findAndModify(
+                                                        {
+                                                            _id: req.body.meetId
+                                                        }, // query
+                                                        {
+                                                            $set: {
+                                                                target: {
+                                                                    username: req.body.target_username,
+                                                                    nickname: result.nickname,
+                                                                    specialPic: tmpSpecialPic
+                                                                },
+                                                                status: '待回复'
+                                                            }
+                                                        },
+                                                        {
+                                                            new: true
+                                                        },
+                                                        next
+                                                    );
+                                                }
+                                                else
+                                                {
+                                                    db.get('meet').insert(
+                                                        {
+                                                            creater: {
+                                                                username: req.body.creater_username
+                                                            },
+                                                            target: {
+                                                                username: req.body.target_username,
+                                                                nickname: result.nickname,
+                                                                specialPic: tmpSpecialPic
+                                                            },
+                                                            status: req.body.status,
+                                                            replyLeft: 2,
+                                                            mapLoc: req.body.mapLoc,
+                                                            specialInfo: req.body.specialInfo,
+                                                            personLoc: req.body.personLoc
+                                                        },
+                                                        next
+                                                    );
+                                                }
+                                            }
+                                        ],
+                                        finalCallback
+                                    );
+                                }
+                            }
+                        }
+                    );
+                }
+            ],
+            finalCallback
+        );
+    }
+});
+
+app.put('/replyReduce', function(req, res) {
+    db.get('meet').findAndModify(
+        {
+            _id: req.body.meetId
+        }, // query
+        {
+            $inc:
+            {
+                replyLeft: -1
+            }
+        },
+        {new : true}, // options
+        function(err, doc) {
+            console.log(err);
+            if (err){
+                res.statusCode = 400;
+                res.json({result: err.toString()});
+            }
+            else
+            {
+                res.json({result: doc.replyLeft});
+            }
+        });
+});
+
+app.post('/replySuccess', function(req, res) {
+    function finalCallback(err, doc) {
+        if (err){
+            res.statusCode = 400;
+            res.json({result: err.toString()});
+        }
+        else{
+            res.json({result: doc, meetId: req.body.meetId});
+        }
+    }
+
+    var tmpSpecialPic;
+    async.waterfall([
+            function(next){
+                db.get('friend').find(
+                    {
+                        $or: [
+                            {
+                                "creater.username" : req.body.creater_username,
+                                "target.username" : req.body.target_username
+                            },
+                            {
+                                "creater.username" : req.body.target_username,
+                                "target.username" : req.body.creater_username
+                            }
+                        ]
+                    },
+                    next
+                );
+            },
+            function(result, next)
+            {
+                if (result.length > 0)
+                {
+                    res.statusCode = 409;
+                    res.json({result: "此人已经是你的朋友"});
+                    return;
+                }
+                else
+                {
+                    db.get('info').findOne(
+                        {
+                            username: req.body.creater_username
+                        },
+                        next
+                    );
+                }
+            },
+            function(result, next){
+                tmpSpecialPic = result.specialPic;
+                db.get('user').findOne(
+                    {
+                        username: req.body.creater_username
+                    },
+                    next
+                );
+            },
+            function(result, next){
+                //设置meet为成功, 添加creater的specialPic, nickname
+                db.get('meet').findAndModify(
+                    {
+                        _id: req.body.meetId
+                    }, // query
+                    {
+                        $set:
+                        {
+                            "creater.nickname": result.nickname,
+                            "creater.specialPic": tmpSpecialPic,
+                            status: '成功'
+                        }
+                    },
+                    { new: true }, // options
+                    next
+                );
+            },
+            function(result, next){
+                //
+                db.get('friend').insert(
+                    {
+                        creater: result.creater,
+                        target: result.target,
+                        messages: []
+                    },
+                    next
+                );
+            }
+        ],
+        finalCallback
+    );
+});
+
+app.get('/getFriends', function(req, res) {
+    db.get('friend').find(
+        {
+            $or: [
+                {"creater.username": req.query.username},
+                {"target.username": req.query.username}
+            ]
+        },
+        function(err, docs){
+            if (err){
+                res.statusCode = 400;
+                res.json({result: err.toString()});
+            }
+            else{
+                res.json({result: docs});
+            }
+        }
+    );
+});
+
+app.put('/updateLocation', function(req, res) {
+    db.get('info').findAndModify(
+        {
+            username: req.body.username
+        }, // query
+        {
+            $set:
+            {
+                latestLocation: req.body.latestLocation,
+                locUpdateTime: Date.now()
+            }
+        },
+        {}, // options
+        function(err, doc) {
+            if (err){
+                res.statusCode = 400;
+                res.json({result: err.toString()});
+            }
+            else
+            {
+                res.json({result: 'ok'});
+            }
+        });
+});
+
+app.get('/existInfo', function(req, res) {
+    var now = new Date();
+    var currentDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    var currentDateTimeStamp = currentDate.getTime();
+    db.get('info').find(
+        {
+            username: req.query.username,
+            updateTime: {$gt:currentDateTimeStamp}
+        },
+        function(err, docs){
+            if (err){
+                res.statusCode = 400;
+                res.json({result: err.toString()});
+            }
+            else
+            {
+                if (docs.length > 0)
+                {
+                    //检查是否还有发送meet的次数
+                    db.get('meet').find(
+                        { "creater.usernmae": req.body.username},
+                        {sort: {_id: -1}, limit : 1},
+                        function(err, result){
+                            if (err){
+                                res.statusCode = 400;
+                                res.json({result: err.toString()});
+                            }
+                            else
+                            {
+                                var before30Sec = Date.now() - 0.5*60000;
+                                if (result[0] && ((parseInt( result[0]._id.toString().substring(0,8), 16 ) * 1000 ) - before30Sec) > 0)
+                                {
+                                    var tmpTimeLong = ((parseInt( result[0]._id.toString().substring(0,8), 16 ) * 1000 ) - before30Sec)/1000;
+                                    res.statusCode = 409;
+                                    res.json({result: '离下次可发送嗨羞要求时间还有:' + tmpTimeLong + '秒钟!'});
+                                }
+                                else
+                                {
+                                    res.json({result: 'yes'});
+                                }
+                            }
+                        }
+                    );
+                }
+                else
+                {
+                    res.statusCode = 409;
+                    res.json({result: '请先完善特征信息!'});
+                }
+            }
+        }
+    );
+});
+
+app.get('/getInfo', function(req, res) {
+    var now = new Date();
+    var currentDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    var currentDateTimeStamp = currentDate.getTime();
+    db.get('info').find(
+        {
+            username: req.query.username,
+            updateTime: {$gt:currentDateTimeStamp}
+        },
+        function(err, docs){
+            if (err){
+                res.statusCode = 400;
+                res.json({result: err.toString()});
+            }
+            else{
+                if (docs.length == 0)
+                {
+                    db.get('user').findOne(
+                        {
+                            username: req.query.username
+                        },
+                        function(err, doc){
+                            if (err) {
+                                res.statusCode = 400;
+                                res.json({result: err.toString()});
+                            }
+                            else
+                            {
+                                res.json(
+                                    {
+                                        result: {
+                                            "specialInfo": {
+                                                "sex": doc.sex,
+                                                "clothesColor": null,
+                                                "clothesStyle": null,
+                                                "clothesType": null,
+                                                "glasses": null,
+                                                "hair": null
+                                            },
+                                            specialPic: null
+                                        }
+                                    }
+                                );
+                            }
+
+                        }
+                    );
+                }
+                else
+                {
+                    res.json({
+                        result: docs[0]
+                    });
+                }
+            }
+        }
+    );
+});
+
+
+app.get('/getBigPic', function(req, res) {
+    res.json({result: ''});
+});
+
+app.post('/uploadSpecialPic', function(req, res){
+    res.json({result: req.files.avatar.name});
+});
+
+app.get('/getLocs', function(req, res) {
+    res.json({result: locs});
+});
+
+
+app.delete('/deleteFriend', function(req, res) {
+    res.json({result: 'ok'});
+});
+
+app.get('/getChats', function(req, res) {
+    res.json({result: chats});
+});
+
+app.post('/sendChatMsg', function(req, res) {
+    res.json({result: 'ok'});
+});
+
+app.get('/iotest', function(req, res){
+    str = '<html><head><script src="http://localhost:3000/socket.io/socket.io.js"></script>\
+    <script>\
+    var socket = io.connect("http://localhost:3000");\
+    socket.on("news", function (data) {\
+        console.log(data);\
+        socket.emit("my other event", { my: "data" });\
+    });\
+    </script></head><body>abc</body></html>';
+    res.end(str);
+});
+
+app.get('/test', function(req, res){
+    req.io.broadcast('news', {my: 'test'});
+    res.end('abc');
+});
+
+// catch 404 and forward to error handler
+app.use(function(req, res, next) {
+    var err = new Error('Not Found');
+    err.status = 404;
+    next(err);
+});
+
+// error handlers
+
+// development error handler
+// will print stacktrace
+if (app.get('env') === 'development') {
+    app.use(function(err, req, res, next) {
+        res.status(err.status || 500);
+        res.render('error', {
+            message: err.message,
+            error: err
+        });
+    });
+}
+
+// production error handler
+// no stacktraces leaked to user
+app.use(function(err, req, res, next) {
+    res.status(err.status || 500);
+    res.render('/error', {
+        message: err.message,
+        error: {}
+    });
+});
+
+// Broadcast the new visitor event on ready route.
+app.io.route('ready', function(req) {
+    req.io.broadcast('new visitor')
+})
+
+app.listen(3000);
+
+//app.set('port', process.env.PORT || 3000);
+//
+//var server = app.listen(app.get('port'), function() {
+//    debug('Express server listening on port ' + server.address().port);
+//});
+//
+//var io = require('socket.io')(server);
+//
+//io.on('connection', function (socket) {
+//    socket.emit('news', { hello: 'world' });
+//    socket.on('my other event', function (data) {
+//        console.log(data);
+//    });
+//});
