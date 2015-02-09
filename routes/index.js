@@ -540,6 +540,10 @@ router.post('/searchTargets', function(req, res) {
                         }
                     );
                 }
+                else
+                {
+                    next(null, null);
+                }
             },
             function(result, next){
                 db.get('friend').find(
@@ -1077,11 +1081,36 @@ router.get('/existInfo', function(req, res) {
             {
                 if (docs.length > 0)
                 {
-                    res.json({result: 'yes'});
+                    //检查是否还有发送meet的次数
+                    db.get('meet').find(
+                        { "creater.usernmae": req.body.username},
+                        {sort: {_id: -1}, limit : 1},
+                        function(err, result){
+                            if (err){
+                                res.statusCode = 400;
+                                res.json({result: err.toString()});
+                            }
+                            else
+                            {
+                                var before30Sec = Date.now() - 0.5*60000;
+                                if (result[0] && ((parseInt( result[0]._id.toString().substring(0,8), 16 ) * 1000 ) - before30Sec) > 0)
+                                {
+                                    var tmpTimeLong = ((parseInt( result[0]._id.toString().substring(0,8), 16 ) * 1000 ) - before30Sec)/1000;
+                                    res.statusCode = 409;
+                                    res.json({result: '离下次可发送嗨羞要求时间还有:' + tmpTimeLong + '秒钟!'});
+                                }
+                                else
+                                {
+                                    res.json({result: 'yes'});
+                                }
+                            }
+                        }
+                    );
                 }
                 else
                 {
-                    res.json({result: 'no'});
+                    res.statusCode = 409;
+                    res.json({result: '请先完善特征信息!'});
                 }
             }
         }
