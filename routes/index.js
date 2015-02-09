@@ -512,6 +512,36 @@ router.post('/searchTargets', function(req, res) {
     var curFriends2 = [];
     async.waterfall([
             function(next){
+                if (req.body.searchMode == '回复')
+                {
+                    db.get('meet').findOne(
+                        {
+                            _id: req.body.meetId
+                        },
+                        function(err, doc)
+                        {
+                            if (err)
+                            {
+                                res.statusCode = 400;
+                                res.json({result: err.toString()});
+                            }
+                            else
+                            {
+                                if (doc.replyLeft <= 0)
+                                {
+                                    res.statusCode = 409;
+                                    res.json({result: '没有剩余回复次数!'});
+                                }
+                                else
+                                {
+                                    next(null, null);
+                                }
+                            }
+                        }
+                    );
+                }
+            },
+            function(result, next){
                 db.get('friend').find(
                     {
                         "creater.username": req.body.username
@@ -626,6 +656,7 @@ router.post('/searchTargets', function(req, res) {
 
 router.post('/createMeet', function(req, res) {
     var end = false;
+    var tmpSpecialPic;
 
     function finalCallback(err, result){
         if (err) {
@@ -667,6 +698,7 @@ router.post('/createMeet', function(req, res) {
                             },
                             target: null,
                             status: req.body.status,
+                            replyLeft: 2,
                             mapLoc: req.body.mapLoc,
                             specialInfo: req.body.specialInfo,
                             personLoc: req.body.personLoc
@@ -681,177 +713,214 @@ router.post('/createMeet', function(req, res) {
     //待回复
     else
     {
-        //判断是否是已有朋友
-        db.get('friend').find(
-            {
-                $or: [
-                    {
-                        "creater.username" : req.body.creater_username,
-                        "target.username" : req.body.target_username
-                    },
-                    {
-                        "creater.username" : req.body.target_username,
-                        "target.username" : req.body.creater_username
-                    }
-                ]
-            },
-            function(err, result){
-                if (err) {
-                    res.statusCode = 400;
-                    res.json({result: err.toString()});
-                }
-                else {
-                    if (result.length > 0)
-                    {
-                        res.statusCode = 409;
-                        res.json({result: "此人已经是你的朋友"});
-                        end = true;
-                    }
-                }
-            }
-        );
-
-        if (end)
-        {
-            return;
-        }
-
-        //判断是否有互发
-
-        db.get('meet').find(
-            {
-                "creater.username" : req.body.target_username,
-                "target.username" : req.body.creater_username
-            },
-            function(err, result){
-                if (err) {
-                    res.statusCode = 400;
-                    res.json({result: err.toString()});
-                    end = true;
-                }
-                else {
-                    if (result.length > 0)
-                    {
-                        var tmpMeetId = result[0]._id;
-                        //有互发, 自动成为朋友
-                        async.waterfall([
-                                function(next){
-                                    db.get('info').findOne(
-                                        {
-                                            username: req.body.target_username
-                                        },
-                                        next
-                                    );
-                                },
-                                function(result, next){
-                                    tmpSpecialPic = result.specialPic;
-                                    db.get('user').findOne(
-                                        {
-                                            username: req.body.target_username
-                                        },
-                                        next
-                                    );
-                                },
-                                function(result, next){
-                                    //设置meet为成功, 添加creater的specialPic, nickname
-                                    db.get('meet').findAndModify(
-                                        {
-                                            _id: tmpMeetId
-                                        }, // query
-                                        {
-                                            $set:
-                                            {
-                                                "creater.nickname": result.nickname,
-                                                "creater.specialPic": tmpSpecialPic,
-                                                status: '成功'
-                                            }
-                                        },
-                                        { new: true }, // options
-                                        next
-                                    );
-                                }
-                            ],
-                            finalCallback2
-                        );
-                        end = true;
-                    }
-                }
-            }
-        );
-
-        if (end)
-        {
-            return;
-        }
-
-        var tmpSpecialPic;
         async.waterfall([
                 function(next){
-                    db.get('info').findOne(
+                    //判断是否是已有朋友
+                    db.get('friend').find(
                         {
-                            username: req.body.target_username
-                        },
-                        next
-                    );
-                },
-                function(result, next){
-                    tmpSpecialPic = result.specialPic;
-                    db.get('user').findOne(
-                        {
-                            username: req.body.target_username
-                        },
-                        next
-                    );
-                },
-                function(result, next){
-                    //确认meet
-                    if (req.body.meetId)
-                    {
-                        db.get('meet').findAndModify(
-                            {
-                                _id: req.body.meetId
-                            }, // query
-                            {
-                                $set: {
-                                    target: {
-                                        username: req.body.target_username,
-                                        nickname: result.nickname,
-                                        specialPic: tmpSpecialPic
-                                    },
-                                    status: '待回复'
+                            $or: [
+                                {
+                                    "creater.username" : req.body.creater_username,
+                                    "target.username" : req.body.target_username
+                                },
+                                {
+                                    "creater.username" : req.body.target_username,
+                                    "target.username" : req.body.creater_username
                                 }
-                            },
-                            {
-                                new: true
-                            },
-                            next
-                        );
-                    }
-                    else
-                    {
-                        db.get('meet').insert(
-                            {
-                                creater: {
-                                    username: req.body.creater_username
-                                },
-                                target: {
-                                    username: req.body.target_username,
-                                    nickname: result.nickname,
-                                    specialPic: tmpSpecialPic
-                                },
-                                status: req.body.status,
-                                mapLoc: req.body.mapLoc,
-                                specialInfo: req.body.specialInfo,
-                                personLoc: req.body.personLoc
-                            },
-                            next
-                        );
-                    }
+                            ]
+                        },
+                        function(err, result){
+                            if (err) {
+                                res.statusCode = 400;
+                                res.json({result: err.toString()});
+                            }
+                            else {
+                                if (result.length > 0)
+                                {
+                                    res.statusCode = 409;
+                                    res.json({result: "此人已经是你的朋友"});
+                                }
+                                else
+                                {
+                                    next(null, null);
+                                }
+                            }
+                        }
+                    );
+                },
+                function(result, next)
+                {
+                    //判断是否有互发
+                    db.get('meet').find(
+                        {
+                            "creater.username" : req.body.target_username,
+                            "target.username" : req.body.creater_username
+                        },
+                        function(err, result){
+                            if (err) {
+                                res.statusCode = 400;
+                                res.json({result: err.toString()});
+                            }
+                            else {
+                                if (result.length > 0)
+                                {
+                                    //有互发
+                                    var tmpMeetId = result[0]._id;
+                                    //有互发, 自动成为朋友
+                                    async.waterfall([
+                                            function(next){
+                                                db.get('info').findOne(
+                                                    {
+                                                        username: req.body.target_username
+                                                    },
+                                                    next
+                                                );
+                                            },
+                                            function(result, next){
+                                                tmpSpecialPic = result.specialPic;
+                                                db.get('user').findOne(
+                                                    {
+                                                        username: req.body.target_username
+                                                    },
+                                                    next
+                                                );
+                                            },
+                                            function(result, next){
+                                                //设置meet为成功, 添加creater的specialPic, nickname
+                                                db.get('meet').findAndModify(
+                                                    {
+                                                        _id: tmpMeetId
+                                                    }, // query
+                                                    {
+                                                        $set:
+                                                        {
+                                                            "creater.nickname": result.nickname,
+                                                            "creater.specialPic": tmpSpecialPic,
+                                                            status: '成功'
+                                                        }
+                                                    },
+                                                    { new: true }, // options
+                                                    next
+                                                );
+                                            },
+                                            function(result, next){
+                                                db.get('friend').insert(
+                                                    {
+                                                        creater: result.creater,
+                                                        target: result.target,
+                                                        messages: []
+                                                    },
+                                                    next
+                                                );
+                                            }
+                                        ],
+                                        finalCallback2
+                                    );
+                                }
+                                else
+                                {
+                                    //无互发
+                                    async.waterfall([
+                                            function(next){
+                                                db.get('info').findOne(
+                                                    {
+                                                        username: req.body.target_username
+                                                    },
+                                                    next
+                                                );
+                                            },
+                                            function(result, next){
+                                                tmpSpecialPic = result.specialPic;
+                                                db.get('user').findOne(
+                                                    {
+                                                        username: req.body.target_username
+                                                    },
+                                                    next
+                                                );
+                                            },
+                                            function(result, next){
+                                                //确认meet
+                                                if (req.body.meetId)
+                                                {
+                                                    db.get('meet').findAndModify(
+                                                        {
+                                                            _id: req.body.meetId
+                                                        }, // query
+                                                        {
+                                                            $set: {
+                                                                target: {
+                                                                    username: req.body.target_username,
+                                                                    nickname: result.nickname,
+                                                                    specialPic: tmpSpecialPic
+                                                                },
+                                                                status: '待回复'
+                                                            }
+                                                        },
+                                                        {
+                                                            new: true
+                                                        },
+                                                        next
+                                                    );
+                                                }
+                                                else
+                                                {
+                                                    db.get('meet').insert(
+                                                        {
+                                                            creater: {
+                                                                username: req.body.creater_username
+                                                            },
+                                                            target: {
+                                                                username: req.body.target_username,
+                                                                nickname: result.nickname,
+                                                                specialPic: tmpSpecialPic
+                                                            },
+                                                            status: req.body.status,
+                                                            replyLeft: 2,
+                                                            mapLoc: req.body.mapLoc,
+                                                            specialInfo: req.body.specialInfo,
+                                                            personLoc: req.body.personLoc
+                                                        },
+                                                        next
+                                                    );
+                                                }
+                                            }
+                                        ],
+                                        finalCallback
+                                    );
+                                }
+                            }
+                        }
+                    );
                 }
             ],
             finalCallback
         );
     }
+});
+
+router.put('/replyReduce', function(req, res) {
+    db.get('meet').findAndModify(
+        {
+            _id: req.body.meetId
+        }, // query
+        {
+            $inc:
+            {
+                replyLeft: -1
+            }
+        },
+        {new : true}, // options
+        function(err, doc) {
+            console.log(err);
+            if (err){
+                res.statusCode = 400;
+                res.json({result: err.toString()});
+            }
+            else
+            {
+                res.json({result: doc.replyLeft});
+            }
+        });
 });
 
 router.post('/replySuccess', function(req, res) {
