@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+var users={};
 var debug = require('debug')('HX2');
 var express = require('express');
 var path = require('path');
@@ -917,21 +918,18 @@ app.post('/sendChatMsg', function(req, res) {
     res.json({result: 'ok'});
 });
 
+app.io.route('ready', function(req) {
+    users[req.data.username] = req.io;
+    console.log(users);
+})
+
 app.get('/iotest', function(req, res){
     str = '<html><head><script src="http://localhost:3000/socket.io/socket.io.js"></script>\
     <script>\
     var socket = io.connect("http://localhost:3000");\
-    socket.on("news", function (data) {\
-        console.log(data);\
-        socket.emit("my other event", { my: "data" });\
-    });\
+        socket.emit("ready", { username: "browserTestName" });\
     </script></head><body>abc</body></html>';
     res.end(str);
-});
-
-app.get('/test', function(req, res){
-    req.io.broadcast('news', {my: 'test'});
-    res.end('abc');
 });
 
 // catch 404 and forward to error handler
@@ -965,11 +963,6 @@ app.use(function(err, req, res, next) {
     });
 });
 
-// Broadcast the new visitor event on ready route.
-app.io.route('ready', function(req) {
-    req.io.broadcast('new visitor')
-})
-
 app.listen(3000);
 
 //app.set('port', process.env.PORT || 3000);
@@ -980,9 +973,10 @@ app.listen(3000);
 //
 //var io = require('socket.io')(server);
 //
-//io.on('connection', function (socket) {
+
+app.io.on('connection', function (socket) {
 //    socket.emit('news', { hello: 'world' });
 //    socket.on('my other event', function (data) {
 //        console.log(data);
 //    });
-//});
+});
