@@ -425,6 +425,55 @@ app.post('/createMeet', function(req, res) {
                         },
                         next
                     );
+                },
+                function(result, next)
+                {
+                    var now = new Date();
+                    var currentDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                    var currentDateTimeStamp = currentDate.getTime();
+                    //通知附近500米还未有特征信息的人
+                    db.get('info').find(
+                        {
+                            $or: [
+                                {
+                                    updateTime: null
+                                },
+                                {
+                                    updateTime: {$lte:currentDateTimeStamp}
+                                }
+                            ],
+                            latestLocation:
+                            {
+                                $near :
+                                {
+                                    $geometry: { type: "Point",  coordinates: [ req.body.personLoc.lng, req.body.personLoc.lat ] },
+                                    $maxDistance: 500
+                                }
+                            }
+                        },
+                        function(err, docs)
+                        {
+                            console.log(docs);
+                            if(err)
+                            {
+                                //没有通知到对方不用做任何事情
+                            }
+                            else
+                            {
+                                docs.forEach(function(item){
+                                    if (users[item.username])
+                                    {
+                                        console.log(item.username);
+                                        users[item.username].emit('infoNeedUpdate');
+                                    }
+                                });
+                            }
+                        }
+                    );
+
+
+
+                    next(null, result);
                 }
             ],
             finalCallback
@@ -918,9 +967,10 @@ app.post('/sendChatMsg', function(req, res) {
     res.json({result: 'ok'});
 });
 
-app.io.route('ready', function(req) {
+app.io.route('online', function(req) {
     users[req.data.username] = req.io;
-    console.log(users);
+    console.log(req.data.username + " online");
+//    console.log(users);
 })
 
 app.get('/iotest', function(req, res){
@@ -975,6 +1025,7 @@ app.listen(3000);
 //
 
 app.io.on('connection', function (socket) {
+//    console.log('con:' + socket.id);
 //    socket.emit('news', { hello: 'world' });
 //    socket.on('my other event', function (data) {
 //        console.log(data);
