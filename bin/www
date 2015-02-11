@@ -465,6 +465,7 @@ app.post('/searchTargets', function(req, res) {
 app.post('/createMeet', function(req, res) {
     var end = false;
     var tmpSpecialPic;
+    var newMeet;
 
     function finalCallback(err, result){
         if (err) {
@@ -516,6 +517,24 @@ app.post('/createMeet', function(req, res) {
                 },
                 function(result, next)
                 {
+                    newMeet = result;
+                    //更新最近发送meet时间
+                    db.get('info').findAndModify(
+                        {
+                            username: req.body.creater_username
+                        }, // query
+                        {
+                            $set:
+                            {
+                                "lastMeetCreateTime": Date.now()
+                            }
+                        },
+                        { new: true }, // options
+                        next
+                    );
+                },
+                function(result, next)
+                {
                     var now = new Date();
                     var before15min = now.getTime() - 15*60000;
 
@@ -561,10 +580,7 @@ app.post('/createMeet', function(req, res) {
                             }
                         }
                     );
-
-
-
-                    next(null, result);
+                    next(null, newMeet);
                 }
             ],
             finalCallback
@@ -758,6 +774,72 @@ app.post('/createMeet', function(req, res) {
     }
 });
 
+app.put('/fakeSelect', function(req, res) {
+    function finalCallback(err, doc) {
+        if (err){
+            res.statusCode = 400;
+            res.json({result: err.toString()});
+        }
+        else{
+            res.json({result: doc});
+        }
+    }
+
+    async.waterfall([
+            function(next){
+                //选择最近选择fake图片的时间
+                db.get('info').findOne(
+                    {
+                        username: req.body.username
+                    }, // query
+                    next
+                );
+            },
+            function(result, next)
+            {
+                var before30Sec = Date.now() - 0.5*60000;
+                if (result.lastFakeSelectTime >= before30Sec)
+                {
+                    //扣血
+                    //更新最近选择fake图片的时间
+                    db.get('info').findAndModify(
+                        {
+                            username: req.body.username
+                        }, // query
+                        {
+                            $set:
+                            {
+                                lastFakeSelectTime: Date.now(),
+                                lastMeetCreateTime: Date.now()
+                            }
+                        },
+                        {new : true}, // options
+                        next
+                    );
+                }
+                else
+                {
+                    //更新最近选择fake图片的时间
+                    db.get('info').findAndModify(
+                        {
+                            username: req.body.username
+                        }, // query
+                        {
+                            $set:
+                            {
+                                lastFakeSelectTime: Date.now()
+                            }
+                        },
+                        {new : true}, // options
+                        next
+                    );
+                }
+            }
+        ],
+        finalCallback
+    );
+});
+
 app.put('/replyReduce', function(req, res) {
     db.get('meet').findAndModify(
         {
@@ -771,7 +853,6 @@ app.put('/replyReduce', function(req, res) {
         },
         {new : true}, // options
         function(err, doc) {
-            console.log(err);
             if (err){
                 res.statusCode = 400;
                 res.json({result: err.toString()});
@@ -938,30 +1019,40 @@ app.get('/existInfo', function(req, res) {
                 if (docs.length > 0)
                 {
                     //检查是否还有发送meet的次数
-                    db.get('meet').find(
-                        { "creater.usernmae": req.body.username},
-                        {sort: {_id: -1}, limit : 1},
-                        function(err, result){
-                            if (err){
-                                res.statusCode = 400;
-                                res.json({result: err.toString()});
-                            }
-                            else
-                            {
-                                var before30Sec = Date.now() - 0.5*60000;
-                                if (result[0] && ((parseInt( result[0]._id.toString().substring(0,8), 16 ) * 1000 ) - before30Sec) > 0)
-                                {
-                                    var tmpTimeLong = ((parseInt( result[0]._id.toString().substring(0,8), 16 ) * 1000 ) - before30Sec)/1000;
-                                    res.statusCode = 409;
-                                    res.json({result: '离下次可发送嗨羞要求时间还有:' + tmpTimeLong + '秒钟!'});
-                                }
-                                else
-                                {
-                                    res.json({result: 'yes'});
-                                }
-                            }
-                        }
-                    );
+//                    db.get('meet').find(
+//                        { "creater.usernmae": req.body.username},
+//                        {sort: {_id: -1}, limit : 1},
+//                        function(err, result){
+//                            if (err){
+//                                res.statusCode = 400;
+//                                res.json({result: err.toString()});
+//                            }
+//                            else
+//                            {
+//                                var before30Sec = Date.now() - 0.5*60000;
+//                                if (result[0] && ((parseInt( result[0]._id.toString().substring(0,8), 16 ) * 1000 ) - before30Sec) > 0)
+//                                {
+//                                    var tmpTimeLong = ((parseInt( result[0]._id.toString().substring(0,8), 16 ) * 1000 ) - before30Sec)/1000;
+//                                    res.statusCode = 409;
+//                                    res.json({result: '离下次可发送嗨羞要求时间还有:' + tmpTimeLong + '秒钟!'});
+//                                }
+//                                else
+//                                {
+//                                    res.json({result: 'yes'});
+//                                }
+//                            }
+//                        }
+//                    );
+                    var before30Sec = Date.now() - 0.5*60000;
+                    if (docs[0].lastMeetCreateTime >= before30Sec)
+                    {
+                        res.statusCode = 409;
+                        res.json({result: '离下次可发送嗨羞要求时间还有:' + (docs[0].lastMeetCreateTime - before30Sec)/1000 + '秒钟!'});
+                    }
+                    else
+                    {
+                        res.json({result: 'yes'});
+                    }
                 }
                 else
                 {
