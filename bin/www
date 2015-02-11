@@ -236,7 +236,7 @@ app.post('/updateInfo', function(req, res){
                                     _id: { $gt: objectIdWithTimestamp(before15Min) },
                                     status: '待确认',
                                     "specialInfo.sex":doc.sex,
-                                    username: {$ne: req.body.username}
+                                    "creater.username": {$ne: req.body.username}
                                 },
                                 //includeLocs: "dist.location",
                                 //num: 100,
@@ -611,6 +611,24 @@ app.post('/createMeet', function(req, res) {
     {
         async.waterfall([
                 function(next){
+                    if (!(req.body.meetId)){
+                        //更新最近发送meet时间
+                        db.get('info').findAndModify(
+                            {
+                                username: req.body.creater_username
+                            }, // query
+                            {
+                                $set:
+                                {
+                                    "lastMeetCreateTime": Date.now()
+                                }
+                            },
+                            { new: true }, // options
+                            next
+                        );
+                    }
+                },
+                function(result, next){
                     //判断是否是已有朋友
                     db.get('friend').find(
                         {
