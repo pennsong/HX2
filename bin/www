@@ -476,6 +476,16 @@ app.post('/createMeet', function(req, res) {
         else {
             result.createTime = new Date( parseInt( result._id.toString().substring(0,8), 16 ) * 1000 ).toISOString();
             res.json({result: result});
+            //通知target
+            if (req.body.status == '待回复')
+            {
+                console.log(result);
+                console.log(result.target.username + " meetInvite");
+                if (users[result.target.username])
+                {
+                    users[result.target.username].emit('meetInvite', {meet: result});
+                }
+            }
         }
     }
 
