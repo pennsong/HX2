@@ -234,6 +234,7 @@ app.post('/updateInfo', function(req, res){
                                 maxDistance: 500,
                                 query: {
                                     _id: { $gt: objectIdWithTimestamp(before15Min) },
+                                    status: '待确认',
                                     "specialInfo.sex":doc.sex,
                                     username: {$ne: req.body.username}
                                 },
