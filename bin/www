@@ -496,6 +496,15 @@ app.post('/createMeet', function(req, res) {
         }
         else {
             res.json({result: result, ppNote: '互发'});
+            console.log(result);
+            if (users[result.creater.username])
+            {
+                users[result.creater.username].emit('meetSuccess', {result: result});
+            }
+            if (users[result.target.username])
+            {
+                users[result.target.username].emit('meetSuccess', {result: result});
+            }
         }
     }
 
@@ -882,7 +891,16 @@ app.post('/replySuccess', function(req, res) {
             res.json({result: err.toString()});
         }
         else{
-            res.json({result: doc, meetId: req.body.meetId});
+            res.json({result: doc});
+            //console.log(doc);
+            if (users[doc.creater.username])
+            {
+                users[doc.creater.username].emit('meetSuccess', {result: doc});
+            }
+            if (users[doc.target.username])
+            {
+                users[doc.target.username].emit('meetSuccess', {result: doc});
+            }
         }
     }
 
@@ -1055,6 +1073,7 @@ app.get('/existInfo', function(req, res) {
 //                        }
 //                    );
                     var before30Sec = Date.now() - 0.5*60000;
+                    console.log(docs);
                     if (docs[0].lastMeetCreateTime >= before30Sec)
                     {
                         res.statusCode = 409;
