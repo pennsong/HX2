@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 var users={};
 var debug = require('debug')('HX2');
-var express = require('express');
+//var express = require('express');
+var expressIo = require('express.io');
 var path = require('path');
 var favicon = require('serve-favicon');
 var logger = require('morgan');
@@ -22,8 +23,8 @@ var async = require("async");
 
 var cors = require('cors');
 //var app = express();
-app = require('express.io')()
-app.http().io()
+app = expressIo();
+app.http().io();
 
 app.use(bodyParser({limit: '5mb'}));
 app.use(cors());
@@ -35,17 +36,32 @@ app.set('view engine', 'jade');
 //app.use(favicon(__dirname + '/public/favicon.ico'));
 app.use(logger('dev'));
 
-app.use(multer({ dest: '../public/images/normal/'}));
+app.use(multer({ dest: path.join(__dirname, '../public/images/normal/')}));
 
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(cookieParser());
-app.use(express.static(path.join(__dirname, '../public')));
+app.use(expressIo.static(path.join(__dirname, '../public')));
 
 //app.use('/', router);
 //app.use('/', routes);
 //app.use('/users', users);
 
+function objectIdWithTimestamp(timestamp)
+{
+    // Convert string date to Date object (otherwise assume timestamp is a date)
+    if (typeof(timestamp) == 'string') {
+        timestamp = new Date(timestamp);
+    }
+
+    // Convert date object to hex seconds since Unix epoch
+    var hexSeconds = Math.floor(timestamp/1000).toString(16);
+
+    // Create an ObjectId with that hex timestamp
+    var constructedObjectId = db.get('info').id(hexSeconds + "0000000000000000");
+
+    return constructedObjectId
+}
 
 
 /* GET home page. */
@@ -206,6 +222,78 @@ app.post('/updateInfo', function(req, res){
             }
             else {
                 res.json({result: 'ok'});
+                //通知附近有带确认meet的人
+                var realResult = null;
+                var before15Min = Date.now() - 15*60000;
+                db.get('meet').col.aggregate(
+                    [
+                        {
+                            $geoNear: {
+                                near: { type: "Point", coordinates: [ Number(req.body.latestLocation.lng), Number(req.body.latestLocation.lat) ] },
+                                distanceField: "personLoc",
+                                maxDistance: 500,
+                                query: {
+                                    _id: { $gt: objectIdWithTimestamp(before15Min) },
+                                    "specialInfo.sex":doc.sex,
+                                    username: {$ne: req.body.username}
+                                },
+                                //includeLocs: "dist.location",
+                                //num: 100,
+                                spherical: true
+                            }
+                        },
+                        {
+                            $project: {
+                                finalTotal: {
+                                    $let: {
+                                        vars: {
+                                            vhair: { $cond: { if: {$eq: ['$specialInfo.hair', doc.specialInfo.hair]}, then: 1, else: 0 } },
+                                            vglasses: { $cond: { if: {$eq: ['$specialInfo.glasses', doc.specialInfo.glasses]}, then: 1, else: 0 } },
+                                            vclothesType: { $cond: { if: {$eq: ['$specialInfo.clothesType', doc.specialInfo.clothesType]}, then: 1, else: 0 } },
+                                            vclothesColor: { $cond: { if: {$eq: ['$specialInfo.clothesColor', doc.specialInfo.clothesColor]}, then: 1, else: 0 } },
+                                            vclothesStyle: { $cond: { if: {$eq: ['$specialInfo.clothesStyle', doc.specialInfo.clothesStyle]}, then: 1, else: 0 } }
+                                        },
+                                        in: { $add: [ "$$vhair", "$$vglasses", "$$vclothesType", "$$vclothesColor", "$$vclothesStyle" ] }
+                                    }
+                                },
+                                "creater.username": 1,
+                                _id: 1
+                            }
+                        },
+                        {
+                            $match :
+                            {
+                                finalTotal: {$gte: 4}
+                            }
+                        },
+                        {
+                            $sort:
+                            {
+                                finalTotal: -1
+                            }
+                        }
+                    ],
+                    function(err, docs)
+                    {
+                        console.log(docs);
+                        if(err)
+                        {
+                            //没有通知到对方不用做任何事情
+                            console.log(err);
+                        }
+                        else
+                        {
+                            docs.forEach(function(item){
+                                if (users[item.creater.username])
+                                {
+                                    console.log(item.creater.username + " targetUpdated");
+                                    users[item.creater.username].emit('targetUpdated', {meetId: item._id});
+                                }
+                            });
+                        }
+                    }
+                );
+
             }
         }
     );
@@ -429,6 +517,8 @@ app.post('/createMeet', function(req, res) {
                 function(result, next)
                 {
                     var now = new Date();
+                    var before15min = now.getTime() - 15*60000;
+
                     var currentDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
                     var currentDateTimeStamp = currentDate.getTime();
                     //通知附近500米还未有特征信息的人
@@ -442,6 +532,7 @@ app.post('/createMeet', function(req, res) {
                                     updateTime: {$lte:currentDateTimeStamp}
                                 }
                             ],
+                            locUpdateTime: {$gt: before15min},
                             latestLocation:
                             {
                                 $near :
@@ -453,7 +544,7 @@ app.post('/createMeet', function(req, res) {
                         },
                         function(err, docs)
                         {
-                            console.log(docs);
+                            //console.log(docs);
                             if(err)
                             {
                                 //没有通知到对方不用做任何事情
@@ -463,7 +554,7 @@ app.post('/createMeet', function(req, res) {
                                 docs.forEach(function(item){
                                     if (users[item.username])
                                     {
-                                        console.log(item.username);
+                                        console.log(item.username + " infoNeedUpdate");
                                         users[item.username].emit('infoNeedUpdate');
                                     }
                                 });
