@@ -300,6 +300,137 @@ app.post('/updateInfo', function(req, res){
     );
 });
 
+app.post('/replySearchTargets', function(req, res) {
+    function finalCallback(err, result){
+        if (err) {
+            res.statusCode = 400;
+            res.json({result: err.toString()});
+        }
+        else {
+            res.json({result: result});
+        }
+    }
+
+    async.waterfall([
+            function(next){
+                db.get('meet').findOne(
+                    {
+                        _id: req.body.meetId
+                    },
+                    function(err, doc)
+                    {
+                        if (err)
+                        {
+                            res.statusCode = 400;
+                            res.json({result: err.toString()});
+                        }
+                        else
+                        {
+                            if (doc.replyLeft <= 0)
+                            {
+                                res.statusCode = 409;
+                                res.json({result: '没有剩余回复次数!'});
+                            }
+                            else
+                            {
+                                next(null, null);
+                            }
+                        }
+                    }
+                );
+            },
+            //判断特征条件是否符合
+            function(result, next){
+                db.get('info').findOne(
+                    {
+                        username: req.body.meetCreaterUsername
+                    },
+                    next
+                );
+            },
+            function(result, next){
+                var score = 0;
+                if (result.specialInfo.clothesColor == req.body.meetCondition.specialInfo.clothesColor)
+                {
+                    score++;
+                }
+                if (result.specialInfo.clothesStyle == req.body.meetCondition.specialInfo.clothesStyle)
+                {
+                    score++;
+                }
+                if (result.specialInfo.clothesType == req.body.meetCondition.specialInfo.clothesType)
+                {
+                    score++;
+                }
+                if (result.specialInfo.glasses == req.body.meetCondition.specialInfo.glasses)
+                {
+                    score++;
+                }
+                if (result.specialInfo.hair == req.body.meetCondition.specialInfo.hair)
+                {
+                    score++;
+                }
+
+                if (result.specialInfo.sex != req.body.meetCondition.specialInfo.sex)
+                {
+                    score = 0;
+                }
+
+                if (score >= 4)
+                {
+                    next(null, null);
+                }
+                else
+                {
+                    db.get('meet').findAndModify(
+                        {
+                            _id: req.body.meetId
+                        }, // query
+                        {
+                            $inc:
+                            {
+                                replyLeft: -1
+                            }
+                        },
+                        {new : true}, // options
+                        function(err, doc) {
+                            if (err){
+                                res.statusCode = 400;
+                                res.json({result: err.toString()});
+                            }
+                            else
+                            {
+                                res.statusCode = 409;
+                                res.json({result: '特征条件选择错误!, 剩余回复次数:' + doc.replyLeft});
+                            }
+                        });
+                }
+            },
+            function(result, next)
+            {
+                //确定meet creater的特征图片
+                db.get('info').findOne(
+                    {
+                        username: req.body.meetCreaterUsername
+                    },
+                    next
+                );
+            },
+            function(result, next)
+            {
+                var tmpArray = [];
+                tmpArray.push({username: result.username, specialPic: result.specialPic});
+                for (var i=0; i < 4; i++)
+                {
+                    tmpArray.push({username: "fake", specialPic: "fake.png"});
+                }
+                next(null, tmpArray);
+            }
+        ],
+        finalCallback
+    );
+});
+
 app.post('/searchTargets', function(req, res) {
     var realResult = null;
     var before15Min = Date.now() - 15*60000;
@@ -315,6 +446,7 @@ app.post('/searchTargets', function(req, res) {
 
     var curFriends1 = [];
     var curFriends2 = [];
+    var curTargets = [];
     async.waterfall([
             function(next){
                 if (req.body.searchMode == '回复')
@@ -351,6 +483,18 @@ app.post('/searchTargets', function(req, res) {
                 }
             },
             function(result, next){
+                db.get('meet').find(
+                    {
+                        "creater.username": req.body.username,
+                        status: '待回复'
+                    },
+                    next
+                );
+            },
+            function(result, next){
+                curTargets = result.map(function(item){
+                    return item.target.username;
+                });
                 db.get('friend').find(
                     {
                         "creater.username": req.body.username
@@ -383,7 +527,7 @@ app.post('/searchTargets', function(req, res) {
                                 query: {
                                     locUpdateTime: {$gt: before15Min},
                                     "specialInfo.sex":req.body.meetCondition.specialInfo.sex,
-                                    username: {$ne: req.body.username, $nin: curFriends1.concat(curFriends2)}
+                                    username: {$ne: req.body.username, $nin: (curFriends1.concat(curFriends2)).concat(curTargets)}
                                 },
                                 //includeLocs: "dist.location",
                                 //num: 100,
