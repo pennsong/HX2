@@ -627,6 +627,10 @@ app.post('/createMeet', function(req, res) {
                             next
                         );
                     }
+                    else
+                    {
+                        next(null, null);
+                    }
                 },
                 function(result, next){
                     //判断是否是已有朋友
